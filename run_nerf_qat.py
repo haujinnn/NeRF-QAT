@@ -753,8 +753,6 @@ def train():
     # Summary writers
     # writer = SummaryWriter(os.path.join(basedir, 'summaries', expname))
 
-    logfile = open('/home/gbang/yjha/nerf-pytorch/logs/fern_qat/logfile.txt', 'w')
-
     start = start + 1
     for i in trange(start, N_iters):
         time0 = time.time()
