@@ -11,7 +11,7 @@ cd nerf-qat
 pip install -r requirements.txt
 ```
 
-## How to Run?
+## How to Run
 Download data for two example datasets: `lego` and `fern`
 ```
 bash download_example_data.sh
