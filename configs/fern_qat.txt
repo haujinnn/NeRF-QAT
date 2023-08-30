@@ -1,6 +1,6 @@
-expname = fortress_test
+expname = fern_qat
 basedir = ./logs
-datadir = ./data/nerf_llff_data/fortress
+datadir = ./data/nerf_llff_data/fern
 dataset_type = llff
 
 factor = 8

@@ -186,17 +186,23 @@ def create_nerf(args):
         embeddirs_fn, input_ch_views = get_embedder(args.multires_views, args.i_embed)
     output_ch = 5 if args.N_importance > 0 else 4
     skips = [4]
-    model = NeRF(D=args.netdepth, W=args.netwidth,
+    model = NeRF_qat(D=args.netdepth, W=args.netwidth,
                  input_ch=input_ch, output_ch=output_ch, skips=skips,
                  input_ch_views=input_ch_views, use_viewdirs=args.use_viewdirs).to(device)
+    #######################
+    model.eval()
     grad_vars = list(model.parameters())
+    #######################
 
     model_fine = None
     if args.N_importance > 0:
-        model_fine = NeRF(D=args.netdepth_fine, W=args.netwidth_fine,
+        model_fine = NeRF_qat(D=args.netdepth_fine, W=args.netwidth_fine,
                           input_ch=input_ch, output_ch=output_ch, skips=skips,
                           input_ch_views=input_ch_views, use_viewdirs=args.use_viewdirs).to(device)
+        #######################
+        model_fine.eval()
         grad_vars += list(model_fine.parameters())
+        #######################
 
     network_query_fn = lambda inputs, viewdirs, network_fn : run_network(inputs, viewdirs, network_fn,
                                                                 embed_fn=embed_fn,
@@ -205,6 +211,25 @@ def create_nerf(args):
 
     # Create optimizer
     optimizer = torch.optim.Adam(params=grad_vars, lr=args.lrate, betas=(0.9, 0.999))
+
+    #######################
+    # Fuse modules for pts_linears before QAT
+    for i in range(len(model.pts_linears) - 1):
+        # If current layer is Linear and next layer is ReLU
+        if isinstance(model.pts_linears[i], nn.Linear) and isinstance(model.pts_linears[i+1], nn.ReLU):
+            torch.ao.quantization.fuse_modules(model, [f'pts_linears.{i}', f'pts_linears.{i+1}'], inplace=True)
+            print(f'fuse_modules pts_linears.{i//2} (Linear + ReLU)')
+
+    #######################
+    # 양자화 설정 
+    model.train()
+    model.qconfig = torch.ao.quantization.get_default_qat_qconfig('x86') 
+    torch.ao.quantization.prepare_qat(model, inplace=True)
+
+    model_fine.train()
+    model_fine.qconfig = torch.ao.quantization.get_default_qat_qconfig('x86') 
+    torch.ao.quantization.prepare_qat(model_fine, inplace=True)
+    #######################
 
     start = 0
     basedir = args.basedir
@@ -238,9 +263,9 @@ def create_nerf(args):
         'network_query_fn' : network_query_fn,
         'perturb' : args.perturb,
         'N_importance' : args.N_importance,
-        'network_fine' : model_fine,
+        'network_fine' : model_fine, ##yjha
         'N_samples' : args.N_samples,
-        'network_fn' : model,
+        'network_fn' : model, ##yjha
         'use_viewdirs' : args.use_viewdirs,
         'white_bkgd' : args.white_bkgd,
         'raw_noise_std' : args.raw_noise_std,
@@ -256,7 +281,8 @@ def create_nerf(args):
     render_kwargs_test['perturb'] = False
     render_kwargs_test['raw_noise_std'] = 0.
 
-    return render_kwargs_train, render_kwargs_test, start, grad_vars, optimizer
+
+    return render_kwargs_train, render_kwargs_test, start, grad_vars, optimizer  
 
 
 def raw2outputs(raw, z_vals, rays_d, raw_noise_std=0, white_bkgd=False, pytest=False):
@@ -637,7 +663,7 @@ def train():
             file.write(open(args.config, 'r').read())
 
     # Create nerf model
-    render_kwargs_train, render_kwargs_test, start, grad_vars, optimizer = create_nerf(args)
+    render_kwargs_train, render_kwargs_test, start, grad_vars, optimizer = create_nerf(args) ##yjha##
     global_step = start
 
     bds_dict = {
@@ -664,6 +690,26 @@ def train():
             testsavedir = os.path.join(basedir, expname, 'renderonly_{}_{:06d}'.format('test' if args.render_test else 'path', start))
             os.makedirs(testsavedir, exist_ok=True)
             print('test poses shape', render_poses.shape)
+
+            ##ujha##
+            render_kwargs_train['network_fn'].to(torch.device("cpu"))
+            render_kwargs_train['network_fine'].to(torch.device("cpu"))
+
+            torch.ao.quantization.convert(render_kwargs_train['network_fn'].eval(), inplace=False)
+            torch.ao.quantization.convert(render_kwargs_train['network_fine'].eval(), inplace=False)
+
+            render_kwargs_train['network_fn'].to(device)
+            render_kwargs_train['network_fine'].to(device)
+
+            path = os.path.join(basedir, expname, 'model_qat.tar')
+            torch.save({
+                'global_step': 0, ##global_step
+                'network_fn_state_dict': render_kwargs_train['network_fn'].state_dict(),
+                'network_fine_state_dict': render_kwargs_train['network_fine'].state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+            }, path)
+            print('Saved checkpoints at', path)
+            ############
 
             rgbs, _ = render_path(render_poses, hwf, K, args.chunk, render_kwargs_test, gt_imgs=images, savedir=testsavedir, render_factor=args.render_factor)
             print('Done rendering', testsavedir)
@@ -706,10 +752,21 @@ def train():
 
     # Summary writers
     # writer = SummaryWriter(os.path.join(basedir, 'summaries', expname))
-    
+
+    logfile = open('/home/gbang/yjha/nerf-pytorch/logs/fern_qat/logfile.txt', 'w')
+
     start = start + 1
     for i in trange(start, N_iters):
         time0 = time.time()
+        '''
+        if i > 2000:
+            # Freeze quantizer parameters
+            render_kwargs_train['network_fn'].apply(torch.ao.quantization.disable_observer)
+            render_kwargs_train['network_fine'].apply(torch.ao.quantization.disable_observer)
+            # Freeze batch norm mean and variance estimates
+            render_kwargs_train['network_fn'].apply(torch.nn.intrinsic.qat.freeze_bn_stats)
+            render_kwargs_train['network_fine'].apply(torch.nn.intrinsic.qat.freeze_bn_stats)
+        '''
 
         # Sample random ray batch
         if use_batching:
@@ -826,7 +883,11 @@ def train():
 
     
         if i%args.i_print==0:
-            tqdm.write(f"[TRAIN] Iter: {i} Loss: {loss.item()}  PSNR: {psnr.item()}")
+            ##tqdm.write(f"[TRAIN] Iter: {i} Loss: {loss.item()}  PSNR: {psnr.item()}")
+            log_message = f"[TRAIN] Iter: {i} Loss: {loss.item()}  PSNR: {psnr.item()}"
+            tqdm.write(log_message)
+            logfile.write(log_message + "\n")
+
         """
             print(expname, i, psnr.numpy(), loss.numpy(), global_step.numpy())
             print('iter time {:.05f}'.format(dt))
@@ -870,6 +931,28 @@ def train():
         """
 
         global_step += 1
+
+    ##ujha##
+    '''
+    render_kwargs_train['network_fn'].to(torch.device("cpu"))
+    render_kwargs_train['network_fine'].to(torch.device("cpu"))
+
+    torch.ao.quantization.convert(render_kwargs_train['network_fn'].eval(), inplace=False)
+    torch.ao.quantization.convert(render_kwargs_train['network_fine'].eval(), inplace=False)
+
+    render_kwargs_train['network_fn'].to(device)
+    render_kwargs_train['network_fine'].to(device)
+
+    path = os.path.join(basedir, expname, 'model_qat.tar')
+    torch.save({
+        'global_step': 0, ##global_step
+        'network_fn_state_dict': render_kwargs_train['network_fn'].state_dict(),
+        'network_fine_state_dict': render_kwargs_train['network_fine'].state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+    }, path)
+    print('Saved checkpoints at', path)
+    '''
+    ############
 
 
 if __name__=='__main__':
