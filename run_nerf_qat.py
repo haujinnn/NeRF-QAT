@@ -930,8 +930,8 @@ def train():
 
         global_step += 1
 
-    ##ujha##
-    '''
+    ############
+
     render_kwargs_train['network_fn'].to(torch.device("cpu"))
     render_kwargs_train['network_fine'].to(torch.device("cpu"))
 
@@ -941,6 +941,57 @@ def train():
     render_kwargs_train['network_fn'].to(device)
     render_kwargs_train['network_fine'].to(device)
 
+    key_mapping = {
+        "pts_linears.0.weight_fake_quant.scale" : "pts_linears.0.scale",
+        "pts_linears.0.weight_fake_quant.zero_point" : "pts_linears.0.zero_point",
+        "pts_linears.1.weight_fake_quant.scale" : "pts_linears.1.scale",
+        "pts_linears.1.weight_fake_quant.zero_point" : "pts_linears.1.zero_point",
+        "pts_linears.2.weight_fake_quant.scale" : "pts_linears.2.scale",
+        "pts_linears.2.weight_fake_quant.zero_point" : "pts_linears.2.zero_point",
+        "pts_linears.3.weight_fake_quant.scale" : "pts_linears.3.scale",
+        "pts_linears.3.weight_fake_quant.zero_point" : "pts_linears.3.zero_point",
+        "pts_linears.4.weight_fake_quant.scale" : "pts_linears.4.scale",
+        "pts_linears.4.weight_fake_quant.zero_point" : "pts_linears.4.zero_point",
+        "pts_linears.5.weight_fake_quant.scale" : "pts_linears.5.scale",
+        "pts_linears.5.weight_fake_quant.zero_point" : "pts_linears.5.zero_point",
+        "pts_linears.6.weight_fake_quant.scale" : "pts_linears.6.scale",
+        "pts_linears.6.weight_fake_quant.zero_point" : "pts_linears.6.zero_point",
+        "pts_linears.7.weight_fake_quant.scale" : "pts_linears.7.scale",
+        "pts_linears.7.weight_fake_quant.zero_point" : "pts_linears.7.zero_point",
+        "views_linears.0.weight_fake_quant.scale": "views_linears.0.scale",
+        "feature_linears.0.weight_fake_quant.zero_point" : "feature_linears.0.zero_point",
+        "alpha_linear.weight_fake_quant.scale" : "alpha_linear.scale", 
+        "alpha_linear.weight_fake_quant.zero_point" : "alpha_linear.zero_point", 
+        "rgb_linear.weight_fake_quant.scale" : "rgb_linear.scale"
+    }
+
+    # 모델에 키 매핑을 적용한 새로운 상태 사전을 생성
+    new_network_fn_state_dict = {}
+    new_network_fine_state_dict = {}
+
+    for old_key, new_key in key_mapping.items():
+        if old_key in render_kwargs_train['network_fn'].state_dict():
+            new_network_fn_state_dict[new_key] = render_kwargs_train['network_fn'].state_dict()[old_key]
+
+        if old_key in render_kwargs_train['network_fine'].state_dict():
+            new_network_fine_state_dict[new_key] = render_kwargs_train['network_fine'].state_dict()[old_key]
+
+    # 기존 상태 사전에 없는 예상치 못한 키들을 새로운 상태 사전에 추가
+    unexpected_keys_fn = set(render_kwargs_train['network_fn'].state_dict().keys()) - set(key_mapping.keys())
+    for unexpected_key in unexpected_keys_fn:
+        if unexpected_key.startswith("pts_linears"):
+            new_network_fn_state_dict[unexpected_key] = render_kwargs_train['network_fn'].state_dict()[unexpected_key]
+
+    unexpected_keys_fine = set(render_kwargs_train['network_fine'].state_dict().keys()) - set(key_mapping.keys())
+    for unexpected_key in unexpected_keys_fine:
+        if unexpected_key.startswith("pts_linears"):
+            new_network_fine_state_dict[unexpected_key] = render_kwargs_train['network_fine'].state_dict()[unexpected_key]
+
+    # 기존 모델 상태 사전을 업데이트된 상태 사전으로 교체
+    render_kwargs_train['network_fn'].load_state_dict(new_network_fn_state_dict)
+    render_kwargs_train['network_fine'].load_state_dict(new_network_fine_state_dict)
+
+
     path = os.path.join(basedir, expname, 'model_qat.tar')
     torch.save({
         'global_step': 0, ##global_step
@@ -949,7 +1000,7 @@ def train():
         'optimizer_state_dict': optimizer.state_dict(),
     }, path)
     print('Saved checkpoints at', path)
-    '''
+    
     ############
 
 

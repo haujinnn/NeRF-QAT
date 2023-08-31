@@ -179,7 +179,7 @@ class NeRF_qat(nn.Module):
         else:
             self.output_linear = nn.Linear(W, output_ch)
         
-        ### Adding by yjha ###
+        ######################
         self.quant = torch.ao.quantization.QuantStub()
         self.dequant = torch.ao.quantization.DeQuantStub()
         ######################
@@ -188,7 +188,7 @@ class NeRF_qat(nn.Module):
         input_pts, input_views = torch.split(x, [self.input_ch, self.input_ch_views], dim=-1)
         h = input_pts
         
-        ### Adding by yjha ###
+        ######################
         h = self.quant(h)
         ######################
 
@@ -215,7 +215,7 @@ class NeRF_qat(nn.Module):
         else:
             outputs = self.output_linear(h)
 
-        ### Adding by yjha ###
+        ######################
         outputs = self.dequant(outputs)
         ######################
 

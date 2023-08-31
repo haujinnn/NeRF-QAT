@@ -40,34 +40,43 @@ python run_nerf_qat.py --config configs/{DATASET}_qat.txt
 ```
 replace `{DATASET}` with `lego` | `fern` | etc.
 
+
 ## Code
+The process of QAT is as follows.
+1. Add Fake quantization module
+2. Module Fusion 
+3. Prepare Quantization 
+4. Training Loop
+5. Convert & Save
+
+
 ### 1. Adding Quantization Modules
-To add Fake quantization module at `run_nerf_helpers.py` class `NeRF_qat`
+To add Fake quantization module at `run_nerf_helpers.py` class `NeRF_qat`:
 ```
 # Model
 class NeRF_qat(nn.Module):
     def __init__(self, D=8, W=256, input_ch=3, input_ch_views=3, output_ch=4, skips=[4], use_viewdirs=False):
         
-        # ...
+        ...
         
-        ######################
-        self.quant = torch.ao.quantization.QuantStub()
-        self.dequant = torch.ao.quantization.DeQuantStub()
-        ######################
+        ################
+        self.quant = torch.ao.quantization.QuantStub()         # QuantStub converts tensors from floating point to quantized
+        self.dequant = torch.ao.quantization.DeQuantStub()     # DeQuantStub converts tensors from quantized to floating point
+        ################
 
     def forward(self, x):
         input_pts, input_views = torch.split(x, [self.input_ch, self.input_ch_views], dim=-1)
         h = input_pts
         
-        ######################
+        ################
         h = self.quant(h)
-        ######################
+        ################
 
-        # ...
+        ...
 
-        ######################
+        ################
         outputs = self.dequant(outputs)
-        ######################
+        ################
 
         return outputs  
 ```
